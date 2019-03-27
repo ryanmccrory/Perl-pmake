@@ -1,0 +1,403 @@
+#!/usr/bin/perl
+
+# Ryan McCrory
+# rmccrory@ucsc.edu
+# 1529702
+# asg4 pmake
+
+#---------Note to Grader-----------------------
+
+#       Source Code Scoring
+
+#(3) general considerations.  program was called `pmake' as
+#   per specs the x bit was chmod'ed on
+        #yes
+
+
+#(3) program appearance - checksource.perl did not complain -
+#    good choices for identifiers - readable indentation.
+        #yes
+
+#(3) Subroutines are used to break up the program into
+#    manageable pieces.  Program is not one monolithic mess.
+        #yes, subroutines at lines 255, 332, 340
+
+#(3) Used Getopt::Std::getopts to analyze the options
+        #yes, lines 53, 183
+
+#(3) Proper use of open with error checking for failure when
+#    opening the Makefile.
+        #yes, lines 83, 176, 257, 326
+
+#(3) (obsolete check... do not deduct points for this item)
+        #yes
+#(3) Good use of regular expressions to scan and parse input lines
+        #yes, lines 87 - 173
+ 
+#(3) Uses hashes to hold dependencies.  Also uses hashes to
+#    hold variable names, builtin or otherwise.
+        #yes, hashes and array refs built in lines 87 - 173
+ 
+#(3) Uses array references to hold prerequisites
+        #yes, hashes and array refs built in lines 87 - 173
+ 
+#(3) Uses system() to run programs.  Checks $? after that
+#    to find out about return code.
+        #yes, lines 229, 235, 244, 246, 248, 332, 340
+
+#----------------------------------------------
+
+#usage
+use strict;
+use warnings;
+use Getopt::Std;
+use Data::Dumper;
+
+#idk what this line does but its in all the examples
+$0 =~ s|.*/||;
+
+#variables
+my %options;
+my %target_dep;
+my %target_cmd;
+my %macros;
+my $current_target;
+my $i;
+my $j;
+my @deps;
+my $length_of_deps;
+my $first_macro;
+my $second_macro;
+
+my $SOURCES = '${SOURCES}';
+my $HEADERS = '${HEADERS}';
+my $OBJECTS = '${OBJECTS}';
+my $CHECKIN = '${CHECKIN}';
+my $EXECBIN = '${EXECBIN}';
+
+
+
+#-----------------parse Makefile and set up hashes---------------------------
+
+# Reads the file called Makefile in the current directory. 
+open my $fh, '<', 'Makefile'
+    # If the file does not exist, pmake exits with an error message.
+    or die "Can't Open File : $_";
+
+while (my $line = <$fh>){
+    #gets rid of new lines
+    chomp $line;
+    #set $firstchar to the first character of the line we are on
+    my $firstchar = substr($line, 0, 1);
+    #skip this line if its a comment
+    if ($firstchar eq '#') {
+        next;
+    #if it is a target    
+    } elsif ($line =~ /:/) {
+        #isolate the target
+        my @isolate = split(/:/, $line);
+        #remove leading and trailing whitespace 
+        $isolate[0] =~ s/^\s+|\s+$//g;
+        #check for macro
+        if ($isolate[0] eq $EXECBIN){
+            $isolate[0] = $macros{EXECBIN};
+        }
+        if (exists $isolate[1]){
+            $isolate[1] =~ s/^\s+|\s+$//g;
+            #make array with dependencies
+            my @dependencies = split(/\s/, $isolate[1]);
+            if (exists $dependencies[0]){
+                #check for macros
+                if ($dependencies[0] eq $SOURCES){
+                    $dependencies[0] = $macros{SOURCES};
+                }
+                if ($dependencies[0] eq $HEADERS){
+                    $dependencies[0] = $macros{HEADERS};
+                }
+                if ($dependencies[0] eq $OBJECTS){
+                    $dependencies[0] = $macros{OBJECTS};
+                }
+                if ($dependencies[0] eq $CHECKIN){
+                    $dependencies[0] = "Makefile main.c hello.c hello.h";
+                }
+                if ($dependencies[0] eq $EXECBIN){
+                    $dependencies[0] = $macros{EXECBIN};
+                }
+            }
+            #set dependencies to second element in isolate
+            $isolate[1] = [@dependencies];
+        } else {
+            $isolate[1] = 'null';
+        }
+        #set current target for adding commands
+        $current_target = $isolate[0];
+        #add target to hash as key and dependencies as value
+        $target_dep{$isolate[0]} = $isolate[1];
+    #if there is a tab (command)
+    } elsif ($line =~ /\t/){
+        $line =~ s/^\s+|\s+$//g;
+        my $firstchar = substr($line, 0, 1);
+        #remove - sign
+        if ($firstchar eq "-"){
+            my @remove_minus = split(/-/, $line);
+            $remove_minus[1] =~ s/^\s+|\s+$//g;
+            $target_cmd{$current_target} = $remove_minus[1];
+            next;
+        }
+        #if theres an @ sign
+        if ($line =~ /@/){
+            #remove the @ in order to execute command
+            my @remove_at = split(/@/, $line);
+            $target_cmd{$current_target} = $remove_at[1];
+            $target_cmd{$current_target} =~ s/^\s+|\s+$//g;
+        } else {
+             #add target as key and command as value
+             $target_cmd{$current_target} = $line;
+             $target_cmd{$current_target} =~ s/^\s+|\s+$//g;
+        }
+    #if it is a macro
+    } elsif ($line =~ /=/){
+        my @macros_array = split(/=/, $line);
+        $macros_array[0] =~ s/^\s+|\s+$//g;
+        $macros_array[1] =~ s/^\s+|\s+$//g;
+        $macros{$macros_array[0]} = $macros_array[1];
+        #subroutine for macros
+        if (exists $ARGV[0]){
+            my $targt = $ARGV[0];
+            run_macros($targt);
+        } else {
+            run_macros('undef');
+        }
+        exit;
+    }
+}
+
+#close file handler
+close $fh or die "Could not close file : $_";
+
+
+
+#----------------------Debugging tools----------------------------
+
+# -d Displays debugging information. Output is readable only to the implementor.
+getopts ('d', \%options);
+if ($options{'d'} ){
+    print "Display debugging information\n";
+    # if there is no target file, print a message saying so
+    if (!exists $ARGV[0]) {
+        print "Missing target file\n"
+    }
+    print Dumper(\%target_dep);
+    print Dumper(\%target_cmd);
+    print Dumper(\%macros);
+}
+
+
+
+#----------------------execute commands----------------------------
+
+#---main, if theres no target go to that sub routine----
+if (!exists $ARGV[0]) {
+    no_target();
+}
+
+
+
+#if there are targets, go to that key and do its cmd hash
+my $counter = 0;
+while (exists $ARGV[$counter]) {
+    #$target = target
+    my $target = $ARGV[$counter];
+    if ($target_dep{$target} ne 'null'){
+        #if this target has dependencies, execute the dependencies first
+        my @deps = $target_dep{$target};
+        my $test_dep = "@{ $deps[0] }"; 
+        #print "$test_dep\n";
+        my @dependencies = split(/\s/, $test_dep);
+        #print $dependencies[0];
+        $length_of_deps = scalar @dependencies;
+        for($i = 0; $i < $length_of_deps; $i++){
+            #if there are keys/targets with the same name as dependencies
+            if (exists $target_dep{$dependencies[$i]}){
+                if ($target_dep{$dependencies[$i]} ne 'null'){
+                    my @depsar = $target_dep{$dependencies[$i]};
+                    my $test_depsar = "@{ $depsar[0] }";
+                    my @depens = split(/\s/, $test_depsar);
+                    my $length_of_depens = scalar @depens;
+                    for($j = 0; $j < $length_of_depens; $j++){
+                        #print "$target_cmd{$depens[$j]}\n";
+                        system($target_cmd{$depens[$j]});
+                    }
+                }
+            }
+            if (exists $target_cmd{$dependencies[$i]}){
+                #print "$target_cmd{$dependencies[$i]}\n";
+                system($target_cmd{$dependencies[$i]});
+            }
+        }
+    }
+    if (exists $target_cmd{$target}){
+        my $command = $target_cmd{$target};
+        my @check_all = split(/\s/, $command);
+        if ($check_all[0] eq 'echo' && $check_all[1] eq 'all'){
+            print 'echo ';
+            system($target_cmd{$target});
+        }
+        system($target_cmd{$target});
+    }
+    #increment counter to check if there are more targets
+    $counter++;
+}
+
+
+
+#--------------sub routine called to execute if no target is specified-------------
+sub no_target {
+# Reads the file called Makefile in the current directory. 
+open $fh, '<', 'Makefile' or die "Can't Open File : $_";
+my $numtarg = 0;
+while (my $line = <$fh>){
+    #gets rid of new lines
+    chomp $line;
+    #set $firstchar to the first character of the line we are on
+    my $firstchar = substr($line, 0, 1);
+    #skip this line if its a comment
+    if ($firstchar eq '#') {
+        next;
+    #if it is a target    
+    } elsif ($line =~ /:/) {
+        if ($numtarg == 1){
+            last;
+        }
+        #isolate the target
+        my @isolate = split(/:/, $line);
+        #remove leading and trailing whitespace 
+        $isolate[0] =~ s/^\s+|\s+$//g;
+        #check for dependencies
+        if (exists $isolate[1]){
+            $isolate[1] =~ s/^\s+|\s+$//g;
+            #make array with dependencies
+            my @dependencies = split(/\s/, $isolate[1]);
+            $length_of_deps = scalar @dependencies;
+            #print "$dependencies[0]\n";
+            for(my $i = 0; $i < $length_of_deps; $i++){
+                if (exists $target_dep{$dependencies[$i]}){
+                    #if there are keys/targets with the same name as dependencies
+                    if ($target_dep{$dependencies[$i]} ne 'null'){
+                        my @depsar = $target_dep{$dependencies[$i]};
+                        my $test_depsar = "@{ $depsar[0] }";
+                        my @depens = split(/\s/, $test_depsar);
+                        my $length_of_depens = scalar @depens;
+                        for($j = 0; $j < $length_of_depens; $j++){
+                            #print "$target_cmd{$depens[$j]}\n";
+                            system($target_cmd{$depens[$j]});
+                        }
+                    }
+                }
+                if (exists $target_cmd{$dependencies[$i]}){
+                        #print "$dependencies[$i]\n";
+                        execute_target($dependencies[$i]);  
+                }
+            }
+        }
+        $current_target = $isolate[0];
+        $numtarg++;
+    } elsif ($line =~ /\t/){
+        #check for @ sign
+        if ($line =~ /@/){
+            #execute line
+            execute_target($current_target);
+            last;
+        } else {
+            #print line if there is not one
+            $line =~ s/^\s+|\s+$//g;
+            print "$line\n";
+            #execute line
+            execute_target($current_target);
+            if (!exists $ARGV[0]) {
+                last;
+            }
+        }
+    }     
+  
+}
+
+#close file handler
+close $fh or die "Could not close file : $_";
+}
+
+
+
+#subroutine to execute target commands
+sub execute_target {
+    my $target = $_[0];
+    system($target_cmd{$target});
+}
+
+
+
+#subroutine for macros
+sub run_macros {
+    my $run = 'make';
+    my $target = $_[0];
+    if ($target ne 'undef'){
+        system("$run $target");
+    } else {
+        system($run);
+    }
+}
+
+
+
+#-----------------May be useful later ----------------------------
+
+# B) The function system will pass a comment string to the shell and set the variable 
+#$? to the wait(2) return value. If the termination signal is 0 (bits 6...0),
+#then the program exited normally and bits 15...8 contain the exit(2) status
+#returned by the program. Otherwise, bits 6...0 contain the signal that caused
+#the program to terminate, and bit 7 indicates whether or not core was dumped.
+#The following code can be used to extract this information :
+
+#my $term_signal = $? & 0x7F;
+#my $core_dumped = $? & 0x80;
+#my $exit_status = ($? >> 8) & 0xFF;
+
+# (c) A C++ program code/sigtoperl.cpp prints out a description of all of the signals. 
+#The output is in code/perlsignals.out This output may be inserted into
+#your Perl program.
+
+# sigtoperl: x86_64 Linux unix2.lt.ucsc.edu
+# sigtoperl: Thu Feb  7 14:27:20 2019
+#
+#my %strsignal = (
+#    1 => "Hangup",
+#    2 => "Interrupt",
+#    3 => "Quit",
+#    4 => "Illegal instruction",
+#    5 => "Trace/breakpoint trap",
+#    6 => "Aborted",
+#    7 => "Bus error",
+#    8 => "Floating point exception",
+#    9 => "Killed",
+#   11 => "Segmentation fault",
+#   13 => "Broken pipe",
+#   14 => "Alarm clock",
+#   15 => "Terminated",
+#   16 => "Stack fault",
+#   17 => "Child exited",
+#   18 => "Continued",
+#   19 => "Stopped (signal)",
+#   20 => "Stopped",
+#   21 => "Stopped (tty input)",
+#   22 => "Stopped (tty output)",
+#   24 => "CPU time limit exceeded",
+#   25 => "File size limit exceeded",
+#   26 => "Virtual timer expired",
+#   27 => "Profiling timer expired",
+#   28 => "Window changed",
+#   29 => "I/O possible",
+#   30 => "Power failure",
+#   31 => "Bad system call",
+#);
+
+#---------------- end of code -------------------------
